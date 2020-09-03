@@ -12,4 +12,4 @@ Four algorithms are available:
 
 ## Guide
 
-The code currently contains two applications: the shortest path problem and the knapsack problem with conflicts. Additional applications can be created by adding the appropriate file. To test one of the two applications, unzip the corresponding data files, and execute the corresponding run file with julia, passing the instance details as parameters.
+The code currently contains two applications: the shortest path problem (SP) and the knapsack problem with conflicts (KP). Additional applications can be added by creating the appropriate file. To test one of the two applications, unzip the corresponding data files, and execute the corresponding run file with julia, passing the instance details as parameters.
