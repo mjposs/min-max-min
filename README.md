@@ -1,8 +1,8 @@
 # min-max-min
 
-This repository contains the algorithms used to solvine min-max-min robust optimization problems studied in the paper
+This repository contains the algorithms used to solve min-max-min robust optimization problems studied in the paper
 
-*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-max-min robust combinatorial optimization with few recourse solutions. Available at*
+*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-max-min robust combinatorial optimization with few recourse solutions. Available at XXXX hal reference missing XXXX*
 
 Four algorithms are available:
 * The monholithic reformulation from [HKW15](https://doi.org/10.1287/opre.2015.1392 "K-Adaptability in Two-Stage Robust Binary Programming")
