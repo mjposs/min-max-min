@@ -12,4 +12,4 @@ Four algorithms are available:
 
 ## Guide
 
-The code currently contains two applications: the shortest path problem (SP) and the knapsack problem with conflicts (KP). Additional applications can be added by creating the appropriate file. To test one of the two applications, unzip the corresponding data files, and execute the corresponding run file with julia, passing the instance details as parameters. Notice `heuristic_scenario_generation()` cannot be applied to SP.
+The code currently contains two applications: the shortest path problem (SP) and the knapsack problem with conflicts (KP). Additional applications can be added by creating the appropriate file. To test one of the two applications, unzip the corresponding data files, and execute the corresponding run file with julia, passing the instance details as parameters. Notice that the current version of the code does not contain the functions in SP.jl to apply `heuristic_scenario_generation()` to SP.
