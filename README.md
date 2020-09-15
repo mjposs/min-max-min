@@ -2,7 +2,7 @@
 
 This repository contains the algorithms used to solve min-max-min robust optimization problems studied in the paper
 
-*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-max-min robust combinatorial optimization with few recourse solutions. Available at XXXX hal reference missing XXXX*
+*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-max-min robust combinatorial optimization with few recourse solutions. Available at https://hal.archives-ouvertes.fr/view/index/docid/2939356*
 
 Four algorithms are available:
 * The monholithic reformulation from [HKW15](https://doi.org/10.1287/opre.2015.1392 "K-Adaptability in Two-Stage Robust Binary Programming"), see function `exact_dualization()`
