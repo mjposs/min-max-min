@@ -1,15 +1,25 @@
 " The following initializes the master problem and runs a loop iterating between adding scenarios
 and computing a solution for the current subset of scenarios. It is described in Algorithm 1 of the paper."
 
-function scenario_generation()
-  if heuristicmode == "DUAL"
-    global TIME_HEURISTIC = @elapsed heur,incumbent = heuristic_dualization()
-  elseif heuristicmode == "HEURCG"
-    global TIME_HEURISTIC = @elapsed lb, heur, gap, lm, incumbent = heuristic_scenario_generation()
+function scenario_generation(heuristic)
+  if !heuristic
+    if heuristicmode == "DUAL"
+      global TIME_HEURISTIC = @elapsed heur,incumbent = heuristic_dualization()
+    elseif heuristicmode == "HEURCG"
+      global TIME_HEURISTIC = @elapsed lb, heur, gap, lm, incumbent = scenario_generation(true)
+    end
+    ub = heur
+    println("Heuristic value is $ub")
+    global TIME_GENSOL = @elapsed solutions = generate_solutions(ub)
+  else
+    # HEURISTIC: start with one solution and its neighbours
+    time_ns += @elapsed detsol = find_new_solution(cc[1,:],aa[:][1,:],Inf,[],[],false,false,TIME_LIM)
+    incumbent = Array{Int64}(undef, k, n)
+    for k in K incumbent[k,:] = round_solution(detsol) end
+    δ, ub, sep_objective = build_and_solve_separation(incumbent, XXXX)
+    println("Heuristic value is $ub")
+    global TIME_GENSOL = @elapsed solutions = generate_neighbors(round_solution(incumbent),ub)
   end
-  ub = heur
-  println("Heuristic value is $ub")
-  global TIME_GENSOL = @elapsed solutions = generate_solutions(ub)
   global NUMBER_GENSOL = size(solutions,1)
   for kk in (size(solutions,1)+1):k push!(solutions,solutions[1]) end # add useless solutions in case s < k. Could be avoided by adapting the code but these instances are easy anyway
   S = 1:size(solutions,1)
@@ -52,6 +62,24 @@ function scenario_generation()
       else
         new_scenario_added = false
       end
+      if heuristic && new_scenario_added
+        # HEURISTIC: add one solution and its neighbors along with the scenario
+        time_ns += @elapsed new_solution = relax_and_fix(cc[end,:],aa[:][end,:],UB)
+        println(findall(x->x!=0,new_solution))
+        println("find new sol time: $time_ns")
+        timesoladd = @elapsed solutions_to_add = generate_neighbors(reshape(round_solution(new_solution),length(new_solution),1)',ub)
+        println("add solution time: $timesoladd")
+        for sol in solutions_to_add
+          if !(sol in solutions)
+            NUMBER_GENSOL += 1
+            push!(solutions,sol)
+          end
+        end
+        x_sol_array = Vector{Vector{Float64}}()
+        sol_items = Vector{Vector{Int}}()
+        fill_solutions_bit(solutions, x_sol_array, sol_items)
+        S = 1:size(solutions,1)
+      end
       TT = TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP
       println("$(NUMITER) $(round(lb, digits = 4)) $ub $gap $TT") #print output
       if TT ≥ TIME_LIM
@@ -70,10 +98,10 @@ function heuristic_scenario_generation()
     time_ns = 0
     cc, aa = populate_scenarios()
     δ = []
-    time_ns += @elapsed detsol = find_new_solution(cc[1,:],Inf,[],[],false,false,TIME_LIM)
+    time_ns += @elapsed detsol = find_new_solution(cc[1,:],aa[:][1,:],Inf,[],[],false,false,TIME_LIM)
     incumbent = Array{Int64}(undef, k, n)
     for k in K incumbent[k,:] = round_solution(detsol) end
-    δ, ub = build_and_solve_separation(incumbent)
+    δ, ub, sep_objective = build_and_solve_separation(incumbent, XXXX)
     println("Heuristic value is $ub")
     global TIME_GENSOL = @elapsed solutions = generate_neighbors(round_solution(incumbent),ub)
     global NUMBER_GENSOL = size(solutions,1)
@@ -323,7 +351,7 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function find_new_solution(c_vec,UB,fixedzero,fixedone,relax,bound,TIME)
+function find_new_solution(c_vec,a_vec,UB,fixedzero,fixedone,relax,bound,TIME)
   sol_model=create_model(TIME)
   if relax
     @variable(sol_model, 0<=x[i in N]<=1, container=Array)
@@ -331,6 +359,7 @@ function find_new_solution(c_vec,UB,fixedzero,fixedone,relax,bound,TIME)
     @variable(sol_model, x[i in N], Bin, container=Array)
   end
   add_constraints_X(sol_model,x)
+  @constraint(sol_model, [cons in 1:ncons], sum(a_vec[cons][i]*x[i] for i in N) ≤ data.B[cons] )
   @constraint(sol_model,[i in fixedzero],x[i]==0)
   @constraint(sol_model,[i in fixedone],x[i]==1)
   if bound @constraint(sol_model,sum([x[i]*c_vec[i] for i in N])<=UB) end
@@ -341,11 +370,11 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function relax_and_fix(cc,UB)
+function relax_and_fix(cc,aa,UB)
   fixedzero = []
   fixedone = []
   time_remaining = TIME_LIM-(TIME_HEURISTIC+TIME_GENSOL+TIME_BS+TIME_LAZY_MIP)
-  time_relax = @elapsed solution = find_new_solution(cc,UB,fixedzero,fixedone,true,true,time_remaining)
+  time_relax = @elapsed solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,true,true,time_remaining)
   for i in N
     if solution[i]>=1-ϵ_p
       push!(fixedone,i)
@@ -353,7 +382,7 @@ function relax_and_fix(cc,UB)
       push!(fixedzero,i)
     end
   end
-  solution = find_new_solution(cc,UB,fixedzero,fixedone,false,false,(time_remaining-time_relax))
+  solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,false,false,(time_remaining-time_relax))
   return solution
 end
 

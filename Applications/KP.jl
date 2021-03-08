@@ -198,7 +198,9 @@ end
 #-----------------------------------------------------------------------------------
 
 function add_constraints_X(model::Model, x::Array{VariableRef,1})
-  @constraint(model, sum(data.w[i]*x[i] for i in N) ≤ data.B)
+  if data.ncons == 0  # the knapsack constraint is in X
+    @constraint(model, sum(data.w[i]*x[i] for i in N) ≤ data.B)
+  end
   #@constraint(model,[(i,j) in data.conflicts],x[i]+x[j] ≤ 1)
   @constraint(model,[i in 1:data.n],length(data.E[i])*x[i]+sum(x[j] for j in data.E[i])≤ length(data.E[i]))
   #@constraint(model,[i in 1:length(data.conflicts)],x[collect(data.conflicts[i])[1]]+x[collect(data.conflicts[i])[2]] <= 1)
