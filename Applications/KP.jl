@@ -40,10 +40,18 @@ function generate_data(n, seed, M, density)
   for i in 1:n
     push!(to_print,-c[i]/5)
   end
-  push!(to_print,"FactorLoading")
+  push!(to_print,"FactorLoading_Φ")
   Φ = Matrix{Float64}(undef, 0, M)
   for i in 1:n
     Φ = [Φ; diamond_uniform(M)']
+  end
+  for i in 1:n
+    push!(to_print,Φ[i,:])
+  end
+  push!(to_print,"FactorLoading_Ψ")
+  Ψ = Matrix{Float64}(undef, 0, M)
+  for i in 1:n
+    Ψ = [Ψ; diamond_uniform(M)']
   end
   for i in 1:n
     push!(to_print,Φ[i,:])
@@ -53,7 +61,7 @@ function generate_data(n, seed, M, density)
   for (i,j) in conflicts
     push!(to_print,"$i $j")
   end
-  writedlm(string(dirname(@__FILE__),"/../data/KPneg/$(seed)_$(n)_$(M)_$(density).txt"),to_print)
+  writedlm(string(dirname(@__FILE__),"/../data/KPneg_weightuncertainty/$(seed)_$(n)_$(M)_$(density).txt"),to_print)
 end
 
 
@@ -66,7 +74,8 @@ function read_data(instance::AbstractString)
   data.n = file[4,1]
   data.M = file[6,1]
   data.w = file[8:8+data.n-1,1]
-  data.B = file[8+data.n+1,1]
+  data.B = Vector{Float64}(undef,1)
+  data.B[1] = file[8+data.n+1,1]
   data.hc = file[11+data.n:11+2*data.n-1,1]
   data.Φ = file[11+2*data.n+1:11+3*data.n,1:4]
   data.conflicts = Set.([file[i,1:2] for i in (13+3*data.n):size(file)[1]])
@@ -87,20 +96,22 @@ end
 mutable struct Data
   n::Int
   M::Int
-  B::Float64
+  B::Vector{Float64} # vector of uncertain rhs. contains one element in this application.
   E::Vector{Vector{Int64}}
   w::Vector{Float64}
   hc::Vector{Float64}
   Φ::Matrix{Float64}
+  Ψ::Matrix{Float64}
   conflicts::Vector{Set}
   compatibility::Matrix{Bool}
+  ncons::Int #number of uncertain constraints. equal to 1 in this application.
   Data() = new()
 end
 
 #-----------------------------------------------------------------------------------
 
 function generate_solutions(ub)
-  function gen_sol(x::BitArray,i::Int64,w::Float64,c::Float64,tΦ::Array{Float64,1},admissible::BitArray)
+  function gen_sol(x::BitArray,i::Int64,w::Float64,c::Float64,tΦ::Array{Float64,1},tΨ::Array{Float64,1},admissible::BitArray)
     time_elapsed = time() - starting_time
     if time_elapsed < TIME_LIM
       if i == data.n
@@ -110,16 +121,17 @@ function generate_solutions(ub)
       else
         i = i+1
         x[i] = false
-        gen_sol(x,i,w,c,tΦ,admissible)
+        gen_sol(x,i,w,c,tΦ,tΨ,admissible)
         x[i] = true
-        w += data.w[i]
         if admissible[i] # filter by conflicts constraints
-          if w ≤ data.B # filter by capacity constraint
+          if w - sum(abs.(tΨ)) ≤ data.B # filter by capacity constraint
             tΦ += 0.5 * data.Φ[i,:] .* data.hc[i]
+            tΨ += 0.5 * data.Ψ[i,:] .* data.w[i]
             c += data.hc[i]
+            w += data.w[i]
             next_admissible = copy(admissible)
             next_admissible[i+1:end] = admissible[i+1:end].* data.compatibility[i,i+1:end]
-            gen_sol(x,i,w,c,tΦ,next_admissible)
+            gen_sol(x,i,w,c,tΦ,tΨ,next_admissible)
           end
         end
       end
@@ -132,9 +144,10 @@ function generate_solutions(ub)
   w = 0.0
   c = 0.0
   tΦ = zeros(data.M)
+  tΨ = zeros(data.M)
   admissible = trues(data.n)
   println("Computing X")
-  gen_sol(x,i,w,c,tΦ,admissible)
+  gen_sol(x,i,w,c,tΦ,tΨ,admissible)
   time_elapsed = time() - starting_time
   println("|X|=$(length(X))")
   non_dom = trues(length(X)) # given x ∈ X, if ∃ y ∈ X : y ⊃ x, then x is dominated by y
@@ -193,38 +206,64 @@ end
 
 #-----------------------------------------------------------------------------------
 
-"Create cc with k rows"
+"Create aa and cc with k rows"
 function populate_scenarios()
   cc = Array{Float64,2}(undef,1,data.n)
+  aa = Vector{Array{Float64,2}}(undef,1)
+  aa[1] = Array{Float64,2}(undef,1,data.n)
   for l in N cc[1,l] = data.hc[l] end
   for i = 1:k-1
     new_cost = [data.hc[l] for l in N] #This can be improved by adding other scenarios
     cc = [cc; new_cost']
   end
-  return cc
+  for l in N aa[1][1,l] = data.w[l] end
+  for i = 1:k-1
+    new_weight = [data.w[l] for l in N] #This can be improved by adding other scenarios
+    aa[1] = [aa[1]; new_weight']
+  end
+  return aa, cc
 end
 
 #-----------------------------------------------------------------------------------
 
 function add_scenario(δ)
-  return [(1+sum(data.Φ[i,j]*δ[j] for j in 1:data.M)/2)data.hc[i] for i in N]
+  new_cost = [(1+sum(data.Φ[i,j]*δ[j] for j in 1:data.M)/2)data.hc[i] for i in N]
+  new_weights = [ [(1+sum(data.Ψ[i,j]*δ[j] for j in 1:data.M)/2)data.w[i] for i in N] for cons in 1:1 ] # only one constraint is considered
+  return new_cost, new_weights
 end
 
 #-----------------------------------------------------------------------------------
 
-function build_and_solve_separation(x)
+function build_and_solve_separation(x,θ)
   time_remaining = TIME_LIM-(TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP)
   separate = create_model(max(0,time_remaining))
-  @variable(separate, z)
-  @variable(separate, -1 ≤ δ[1:data.M] ≤ 1)
-  @constraint(separate, sep_cost[k in K], z <= sum((1+sum(data.Φ[i,j]*δ[j] for j in 1:data.M)/2)data.hc[i]*x[k,i] for i in N))
-  @objective(separate, Max, z)
-  optimize!(separate)
-
-  if termination_status(separate)==MOI.OPTIMAL
-    return value.(δ),objective_value(separate)
+  if data.ncons == 0
+    @variable(separate, z)
+    @variable(separate, -1 ≤ ξ[1:data.M] ≤ 1)
+    @constraint(separate, sep_cost[k in K], z <= sum((1+sum(data.Φ[i,j]*ξ[j] for j in 1:data.M)/2)data.hc[i]*x[k,i] for i in N))
+    @objective(separate, Max, z)
+    optimize!(separate)
+    sep_objective = true
   else
-    return [],-Inf
+    data.ncons = L
+    @variable(separate, ζ)
+    @variable(separate, z[K,0:L], Bin)
+    @variable(separate, -1 ≤ ξ[1:data.M] ≤ 1)
+    @constraint(separate, [k in K], sum(z[k,l] for l in 0:L) == 1)
+    @constraint(separate, [k in K], z[k,0] => {ζ ≤ sum((1+sum(data.Φ[i,j]*ξ[j] for j in 1:data.M)/2)data.hc[i]*x[k,i] for i in N) - θ})
+    @constraint(separate, [k in K,l in 1:L], z[k,l] => {ζ ≤ sum((1+sum(data.Ψ[i,j]*ξ[j] for j in 1:data.M)/2)data.w[i]*x[k,i] for i in N) - data.B[l]})
+    optimize!(separate)
+    sep_objective = isempty(findall(value.(z[:,1:L]) .== false))
+    if sep_objective
+      # the scenario was found for the objective for each k
+      # verify if it is indeed feasible
+      sep_objective = sum([1+sum([data.Ψ[i,j]*getvalue(ξ[j]) for j in 1:data.M])/2)data.w[i]*x[k,i] for i in N]) - data.B[l] ≤ 0
+    end
+  end
+  if termination_status(separate)==MOI.OPTIMAL
+    return value.(ξ),objective_value(separate)
+  else
+    return [],-Inf, false
   end
 end
 

@@ -39,6 +39,7 @@ function read_data(instance::AbstractString)
     data.hc[i] = norm(coord[data.from[i],1:2]-coord[data.to[i],1:2])
     data.d[i] = data.hc[i]/2
   end
+  data.ncons = 0
   return data
 end
 
@@ -57,6 +58,7 @@ mutable struct Data
   s::Int
   t::Int
   b::Vector{Int} #RHS
+  ncons::Int #number of incertain constraints (=0 for the instances of the paper)
   Data() = new()
 end
 
@@ -153,7 +155,7 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function build_and_solve_separation(x)
+function build_and_solve_separation(x,lb)
   time_remaining = TIME_LIM-(TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP)
   separate = create_model(max(0,time_remaining))
   @variable(separate, z)

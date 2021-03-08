@@ -13,14 +13,15 @@ function scenario_generation()
   global NUMBER_GENSOL = size(solutions,1)
   for kk in (size(solutions,1)+1):k push!(solutions,solutions[1]) end # add useless solutions in case s < k. Could be avoided by adapting the code but these instances are easy anyway
   S = 1:size(solutions,1)
-  cc = populate_scenarios()
+  aa, cc = populate_scenarios()
   new_scenario_added = true
   x_sol_array = Vector{Vector{Float64}}()
   sol_items = Vector{Vector{Int}}()
   fill_solutions_bit(solutions, x_sol_array, sol_items)
   lb = minimum([sum([x_sol_array[s][l]*cc[1,l] for l in N]) for s in S]) # starting lb: min_x∈X u^Tx for some u ∈ U
   M = 1:size(cc,1)
-  d = Array{Float64,2}(undef,size(solutions,1),size(cc,1))
+  d = Matrix{Float64}(undef,size(solutions,1),size(cc,1)) # cost of each solution in each scenario
+  a_cov = Array{Matrix{Bool}}(undef,data.ncons) # constraint satisfaction of each solution in each scenario
   global NUMITER = 0 # count the number of iterations of the scenarios generation loop
   gap = 100
   if TIME_HEURISTIC + TIME_GENSOL < TIME_LIM
@@ -28,20 +29,26 @@ function scenario_generation()
     while new_scenario_added
       δ = []
       global NUMITER += 1
+      if data.ncons > 0
+        a_cov = update_a(x_sol_array,aa,a_cov,S,M)
+      end
       d = update_d(x_sol_array,cc,d,S,M)
-      global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items, lb, ub, min(gap,1),d,cc,δ)
+      global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items, lb, ub, min(gap,1),d,a_cov,cc,δ)
       if length(x) > 0
-        global TIME_LAZY_MIP += @elapsed δ, sep_value = build_and_solve_separation(x)
-        if sep_value < ub  && sep_value > -Inf
+        global TIME_LAZY_MIP += @elapsed δ, sep_value, sep_objective = build_and_solve_separation(x,lb)
+        if sep_objective && sep_value < ub  && sep_value > -Inf
           ub = round(sep_value, digits = 4)
           incumbent = x
         end
       end
       gap = 100*round((ub - lb)/abs(ub), digits = 4)
       if gap > ϵ && length(δ)>0
-          new_cost = add_scenario(δ)
+          new_cost, new_weights = add_scenario(δ)
           M = 1:(length(M)+1)
           cc = [cc; new_cost']
+          for cons in 1:data.ncons
+            aa[cons] = [aa[cons]; new_weights[cons]']
+          end
       else
         new_scenario_added = false
       end
@@ -58,9 +65,10 @@ end
 #-----------------------------------------------------------------------------------
 "Heuristic variant of the previous function, desribed in Algorithm 3 of the paper."
 
+#### THE FOLLOWING NEEDS TO BE UPDATED TO HANDLE CONSTRAINT UNCERTAINTY #####
 function heuristic_scenario_generation()
     time_ns = 0
-    cc = populate_scenarios()
+    cc, aa = populate_scenarios()
     δ = []
     time_ns += @elapsed detsol = find_new_solution(cc[1,:],Inf,[],[],false,false,TIME_LIM)
     incumbent = Array{Int64}(undef, k, n)
@@ -85,9 +93,9 @@ function heuristic_scenario_generation()
             global NUMITER += 1
             dtime = @elapsed d = calculate_d(x_sol_array,cc,S,M)
             println("recalculate d time: $dtime")
-            global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items, lb, ub, min(gap,1),d,cc,δ)
+            global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items,lb,ub,min(gap,1),d,a,cc,δ)
             if length(x) > 0
-              global TIME_LAZY_MIP += @elapsed δ, sep_value = build_and_solve_separation(x)
+              global TIME_LAZY_MIP += @elapsed δ, sep_value = build_and_solve_separation(x,lb)
               if sep_value < ub  && sep_value > -Inf
                 ub = round(sep_value, digits = 4)
                 incumbent = x
@@ -137,7 +145,7 @@ end
 a binary search algorithm based on the optimal solution cost, in line with the radius
 formulation used for the p-center problem. It is described in Algorithm 2 of the paper."
 
-function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,cc,δ)
+function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,a_cov,cc,δ)
   S = 1:length(x_sol_array)
   M = 1:size(cc,1)
   last = false # equal to true if this is the last iteration: the threshold has been reached but a feasible solution is still needed
@@ -154,7 +162,10 @@ function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,cc,δ)
     else
       r = (lb+ub)/2 # otherwise binary search classical update of r
     end
-    TIME_SCP += @elapsed cov = [ 2*(d[s,m]-r)/abs(d[s,m]+r) ≤ ϵ_p for s in S, m in M]
+    TIME_SCP += @elapsed cov = [ 2*(d[s,m]-r)/abs(d[s,m]+r) ≤ ϵ_p for s in S, m in M ]
+    for cons in 1:data.ncons
+      cov = cov .& a_cov[cons] # this might be sped-up by avoiding repeating 0 elements and using sparse representations
+    end
     infeasible = false
     if minimum([length(findall(cov[:,m])) for m in M]) == 0
       infeasible = true
@@ -282,6 +293,22 @@ function update_d(x_sol_array,cc,d,S,M)
       d = [d new_costs]
     end
   return d
+end
+
+#-----------------------------------------------------------------------------------
+
+function update_a(x_sol_array,aa,a_cov,S,M)
+    if NUMITER == 1
+      for cons in data.ncons, s in S, m in M
+        a_cov[cons][s,m] = sum([x_sol_array[s][l]*aa[cons][m,l] for l in N]) ≤ data.B[cons]
+      end
+    else
+      for cons in data.ncons, s in S, m in M
+        new_cov = [sum([x_sol_array[s][l]*aa[length(M),l] for l in N]) ≤ data.B[cons] for s in S]
+        a_cov[cons] = [a_cov[cons] new_cov]
+      end
+    end
+  return a_cov
 end
 
 #-----------------------------------------------------------------------------------
