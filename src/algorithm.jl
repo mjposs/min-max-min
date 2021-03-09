@@ -1,52 +1,67 @@
 " The following initializes the master problem and runs a loop iterating between adding scenarios
-and computing a solution for the current subset of scenarios. It is described in Algorithm 1 of the paper."
+and computing a solution for the current subset of scenarios. It is described in Algorithms 1 and 3 of the paper.
+  It is assumed throughout that the number of uncertain constraints is equal to data.ncons."
 
 function scenario_generation(heuristic)
+  aa, cc = populate_scenarios()
   if !heuristic
     if heuristicmode == "DUAL"
-      global TIME_HEURISTIC = @elapsed heur,incumbent = heuristic_dualization()
+      @timeit to "heuristic" heur,incumbent = heuristic_dualization()
     elseif heuristicmode == "HEURCG"
-      global TIME_HEURISTIC = @elapsed lb, heur, gap, lm, incumbent = scenario_generation(true)
+      @timeit to "heuristic" begin
+        lb, heur, gap, lm, incumbent = scenario_generation(true)
+      end
     end
     ub = heur
+    @info "exact mode"
     println("Heuristic value is $ub")
-    global TIME_GENSOL = @elapsed solutions = generate_solutions(ub)
+    @timeit to "gen_sol" solutions = generate_solutions(ub)
   else
-    # HEURISTIC: start with one solution and its neighbours
-    time_ns += @elapsed detsol = find_new_solution(cc[1,:],aa[:][1,:],Inf,[],[],false,false,TIME_LIM)
+    # HEURISTIC MODE: start with one solution and its neighbours
+    @info "heuristic mode"
+    detsol = find_new_solution(cc[1,:],aa[:][1,:],Inf,[],[],false,false,TIME_LIM)
     incumbent = Array{Int64}(undef, k, n)
     for k in K incumbent[k,:] = round_solution(detsol) end
-    δ, ub, sep_objective = build_and_solve_separation(incumbent, XXXX)
-    println("Heuristic value is $ub")
-    global TIME_GENSOL = @elapsed solutions = generate_neighbors(round_solution(incumbent),ub)
+    @timeit to "gen_sol" solutions = generate_neighbors(round_solution(incumbent),aa)
+    @timeit to "static ub" ub = solve_static()
   end
-  global NUMBER_GENSOL = size(solutions,1)
   for kk in (size(solutions,1)+1):k push!(solutions,solutions[1]) end # add useless solutions in case s < k. Could be avoided by adapting the code but these instances are easy anyway
   S = 1:size(solutions,1)
-  aa, cc = populate_scenarios()
   new_scenario_added = true
   x_sol_array = Vector{Vector{Float64}}()
   sol_items = Vector{Vector{Int}}()
   fill_solutions_bit(solutions, x_sol_array, sol_items)
-  lb = minimum([sum([x_sol_array[s][l]*cc[1,l] for l in N]) for s in S]) # starting lb: min_x∈X u^Tx for some u ∈ U
+  lb = minimum(sum(x_sol_array[s][l]*cc[1,l] for l in N) for s in S) # starting lb: min_x∈X u^Tx for some u ∈ U
   M = 1:size(cc,1)
   d = Matrix{Float64}(undef,size(solutions,1),size(cc,1)) # cost of each solution in each scenario
-  a_cov = Array{Matrix{Bool}}(undef,data.ncons) # constraint satisfaction of each solution in each scenario
-  global NUMITER = 0 # count the number of iterations of the scenarios generation loop
+  a_cov = Vector{Matrix{Bool}}() # constraint satisfaction of each solution in each scenario
+  for cons in 1:data.ncons
+    push!(a_cov,Matrix{Bool}(undef,size(solutions,1),size(cc,1)))
+  end
+  NUMITER = 0 # count the number of iterations of the scenarios generation loop
   gap = 100
-  if TIME_HEURISTIC + TIME_GENSOL < TIME_LIM
+  if TimerOutputs.tottime(to)/10^9 < TIME_LIM
     println("IT LB  UB  gap time")
     while new_scenario_added
       δ = []
-      global NUMITER += 1
-      if data.ncons > 0
-        a_cov = update_a(x_sol_array,aa,a_cov,S,M)
+      NUMITER += 1
+      if heuristic
+        # The following might be optimized by updating instead of creating from scratch
+        # but I don't think this is bottleneck
+        @timeit to "update d" d = calculate_d(x_sol_array,cc,S,M)
+        if data.ncons > 0
+          @timeit to "update a_cov" a_cov = calculate_a(x_sol_array,aa,S,M)
+        end
+      else
+        @timeit to "update d" d = update_d(x_sol_array,cc,d,S,M,NUMITER)
+        if data.ncons > 0
+          @timeit to "update a_cov" a_cov = update_a(x_sol_array,aa,a_cov,S,M,NUMITER)
+        end
       end
-      d = update_d(x_sol_array,cc,d,S,M)
-      global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items, lb, ub, min(gap,1),d,a_cov,cc,δ)
+      @timeit to "binary search" x, lb = binary_search(x_sol_array,sol_items, lb, ub, min(gap,1),d,a_cov,cc,δ)
       if length(x) > 0
-        global TIME_LAZY_MIP += @elapsed δ, sep_value, sep_objective = build_and_solve_separation(x,lb)
-        if sep_objective && sep_value < ub  && sep_value > -Inf
+        @timeit to "separation" δ, sep_value, feasible = build_and_solve_separation(x)
+        if feasible && sep_value < ub  && sep_value > -Inf
           ub = round(sep_value, digits = 4)
           incumbent = x
         end
@@ -63,15 +78,12 @@ function scenario_generation(heuristic)
         new_scenario_added = false
       end
       if heuristic && new_scenario_added
-        # HEURISTIC: add one solution and its neighbors along with the scenario
-        time_ns += @elapsed new_solution = relax_and_fix(cc[end,:],aa[:][end,:],UB)
-        println(findall(x->x!=0,new_solution))
-        println("find new sol time: $time_ns")
-        timesoladd = @elapsed solutions_to_add = generate_neighbors(reshape(round_solution(new_solution),length(new_solution),1)',ub)
-        println("add solution time: $timesoladd")
+        # HEURISTIC MODE: add a good solution for the last scenario and its neighbors along with the scenario
+        @timeit to "relax and fix" new_solution = relax_and_fix(cc[end,:],aa[:][end,:],ub)
+        @debug findall(x->x!=0,new_solution)
+        @timeit to "generate neighbors" solutions_to_add = generate_neighbors(reshape(round_solution(new_solution),length(new_solution),1)',aa)
         for sol in solutions_to_add
           if !(sol in solutions)
-            NUMBER_GENSOL += 1
             push!(solutions,sol)
           end
         end
@@ -80,91 +92,13 @@ function scenario_generation(heuristic)
         fill_solutions_bit(solutions, x_sol_array, sol_items)
         S = 1:size(solutions,1)
       end
-      TT = TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP
-      println("$(NUMITER) $(round(lb, digits = 4)) $ub $gap $TT") #print output
-      if TT ≥ TIME_LIM
-        break
-      end
+      TotalTime = round(TimerOutputs.tottime(to)/10^9, digits = 2)
+      LowerBound = round(lb, digits = 4)
+      println("$NUMITER $LowerBound $ub $gap $TotalTime") #print output
+      TotalTime > TIME_LIM && break
     end
   end
-  return lb, ub, gap, length(M), incumbent, heur
-end
-
-#-----------------------------------------------------------------------------------
-"Heuristic variant of the previous function, desribed in Algorithm 3 of the paper."
-
-#### THE FOLLOWING NEEDS TO BE UPDATED TO HANDLE CONSTRAINT UNCERTAINTY #####
-function heuristic_scenario_generation()
-    time_ns = 0
-    cc, aa = populate_scenarios()
-    δ = []
-    time_ns += @elapsed detsol = find_new_solution(cc[1,:],aa[:][1,:],Inf,[],[],false,false,TIME_LIM)
-    incumbent = Array{Int64}(undef, k, n)
-    for k in K incumbent[k,:] = round_solution(detsol) end
-    δ, ub, sep_objective = build_and_solve_separation(incumbent, XXXX)
-    println("Heuristic value is $ub")
-    global TIME_GENSOL = @elapsed solutions = generate_neighbors(round_solution(incumbent),ub)
-    global NUMBER_GENSOL = size(solutions,1)
-    for kk in (size(solutions,1)+1):k push!(solutions,solutions[1]) end # add useless solutions in case s < k. Could be avoided by adapting the code but these instances are easy anyway
-    S = 1:size(solutions,1)
-    new_scenario_added = true
-    x_sol_array = Vector{Vector{Float64}}()
-    sol_items = Vector{Vector{Int}}()
-    fill_solutions_bit(solutions, x_sol_array, sol_items)
-    lb = sum([incumbent[1,i]*cc[1,i] for i in N])
-    M = 1:size(cc,1)
-    global NUMITER = 0 # count the number of iterations of the scenarios generation loop
-    gap = 100*round((ub - lb)/abs(ub), digits = 4)
-    if TIME_HEURISTIC + TIME_GENSOL < TIME_LIM
-        println("IT LB  UB  gap time")
-        while new_scenario_added
-            global NUMITER += 1
-            dtime = @elapsed d = calculate_d(x_sol_array,cc,S,M)
-            println("recalculate d time: $dtime")
-            global TIME_BS += @elapsed x, lb = binary_search(x_sol_array,sol_items,lb,ub,min(gap,1),d,a,cc,δ)
-            if length(x) > 0
-              global TIME_LAZY_MIP += @elapsed δ, sep_value = build_and_solve_separation(x,lb)
-              if sep_value < ub  && sep_value > -Inf
-                ub = round(sep_value, digits = 4)
-                incumbent = x
-              end
-            end
-            gap = 100*round((ub - lb)/abs(ub), digits = 4)
-            if gap > ϵ && length(δ)>0
-                new_cost = add_scenario(δ)
-                cc = [cc; new_cost']
-                M = 1:size(cc,1)
-            else
-              new_scenario_added = false
-            end
-            new_costs = [sum([x_sol_array[s][l]*cc[length(M),l] for l in N]) for s in S]
-            d = [d new_costs]
-            UB = minimum(d[:,end])
-            if new_scenario_added
-              time_ns += @elapsed new_solution = relax_and_fix(cc[end,:],UB)
-              println(findall(x->x!=0,new_solution))
-              println("find new sol time: $time_ns")
-              timesoladd = @elapsed solutions_to_add = generate_neighbors(reshape(round_solution(new_solution),length(new_solution),1)',ub)
-              println("add solution time: $timesoladd")
-              for sol in solutions_to_add
-                if !(sol in solutions)
-                  NUMBER_GENSOL += 1
-                  push!(solutions,sol)
-                end
-              end
-              x_sol_array = Vector{Vector{Float64}}()
-              sol_items = Vector{Vector{Int}}()
-              fill_solutions_bit(solutions, x_sol_array, sol_items)
-              S = 1:size(solutions,1)
-            end
-            TT = TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP + time_ns
-            println("$(NUMITER) $(round(lb, digits = 4)) $ub $gap $TT") #print output
-            if TT ≥ TIME_LIM
-              break
-            end
-        end
-    end
-    return lb, ub, gap, length(M), incumbent
+  return lb, ub, gap, length(M), incumbent
 end
 
 #-----------------------------------------------------------------------------------
@@ -178,29 +112,26 @@ function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,a_cov,cc,δ)
   M = 1:size(cc,1)
   last = false # equal to true if this is the last iteration: the threshold has been reached but a feasible solution is still needed
   ITER_BS = 0
-  global TIME_SCP = 0
   x = []
   while (ub - lb)/abs(ub) > ϵ_BS/100 || last || ITER_BS == 0 # the absolute value is needed to handle negative objectives
     ITER_BS += 1
-    if TIME_SCP ≥ TIME_LIM-(TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP)
-      break
-    end
+    TimerOutputs.tottime(to)/10^9 > TIME_LIM && break
     if last
       r = ub # set r large enough to find a feasble solution
     else
       r = (lb+ub)/2 # otherwise binary search classical update of r
     end
-    TIME_SCP += @elapsed cov = [ 2*(d[s,m]-r)/abs(d[s,m]+r) ≤ ϵ_p for s in S, m in M ]
+    @timeit to "build cov" cov = [ 2*(d[s,m]-r)/abs(d[s,m]+r) ≤ ϵ_p for s in S, m in M ]
     for cons in 1:data.ncons
-      cov = cov .& a_cov[cons] # this might be sped-up by avoiding repeating 0 elements and using sparse representations
+      @timeit to "update cov" cov = cov .& a_cov[cons] # this might be sped-up by avoiding repeating 0 elements and using sparse representations
     end
     infeasible = false
-    if minimum([length(findall(cov[:,m])) for m in M]) == 0
+    if minimum(length(findall(cov[:,m])) for m in M) == 0
       infeasible = true
     else
-      TIME_SCP += @elapsed SS = calculate_nondom_solutions(cov,last,M,S)
-      TIME_SCP += @elapsed MM = calculate_nondom_scenarios(cov,M,S)
-      TIME_SCP += @elapsed objval,solutions_selected = build_and_solve_covering_MIP(SS,MM,cov,TIME_SCP)
+      @timeit to "dominance solutions" SS = calculate_nondom_solutions(cov,last,M,S)
+      @timeit to "dominance scenarios" MM = calculate_nondom_scenarios(cov,M,S)
+      @timeit to "covcering" objval,solutions_selected = build_and_solve_covering_MIP(SS,MM,cov)
       infeasible = objval > 0.9
     end
     if !infeasible
@@ -222,7 +153,7 @@ function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,a_cov,cc,δ)
         break
       end
     else
-      if last break end
+      last && break
       lb = r
     end
     if (ub - lb)/abs(ub) ≤ ϵ_BS/100
@@ -287,8 +218,8 @@ end
 " For a given radius, test whether the associated covering problem is feasible using
 a MILP formulation with slack variables."
 
-function build_and_solve_covering_MIP(SS,MM,cov,TIME_SCP)
-  time_remaining = TIME_LIM-(TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP + TIME_SCP)
+function build_and_solve_covering_MIP(SS,MM,cov)
+  time_remaining = TIME_LIM - TimerOutputs.tottime(to)/10^9
   cover = create_model(time_remaining)
   @variable(cover, y[SS], Bin)
   @variable(cover, slack[MM] ≥ 0)
@@ -311,13 +242,13 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function update_d(x_sol_array,cc,d,S,M)
+function update_d(x_sol_array,cc,d,S,M,NUMITER)
     if NUMITER == 1
       for s in S, m in M
-        d[s,m] = sum([x_sol_array[s][l]*cc[m,l] for l in N])
+        d[s,m] = sum(x_sol_array[s][l]*cc[m,l] for l in N)
       end
     else
-      new_costs = [sum([x_sol_array[s][l]*cc[length(M),l] for l in N]) for s in S]
+      new_costs = [sum(x_sol_array[s][l]*cc[length(M),l] for l in N) for s in S]
       d = [d new_costs]
     end
   return d
@@ -325,14 +256,14 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function update_a(x_sol_array,aa,a_cov,S,M)
+function update_a(x_sol_array,aa,a_cov,S,M,NUMITER)
     if NUMITER == 1
       for cons in data.ncons, s in S, m in M
-        a_cov[cons][s,m] = sum([x_sol_array[s][l]*aa[cons][m,l] for l in N]) ≤ data.B[cons]
+        a_cov[cons][s,m] = sum(x_sol_array[s][l]*aa[cons][m,l] for l in N) ≤ data.B[cons]
       end
     else
       for cons in data.ncons, s in S, m in M
-        new_cov = [sum([x_sol_array[s][l]*aa[length(M),l] for l in N]) ≤ data.B[cons] for s in S]
+        new_cov = [sum(x_sol_array[s][l]*aa[cons][length(M),l] for l in N) ≤ data.B[cons] for s in S]
         a_cov[cons] = [a_cov[cons] new_cov]
       end
     end
@@ -342,28 +273,43 @@ end
 #-----------------------------------------------------------------------------------
 
 function calculate_d(x_sol_array,cc,S,M)
-  d = Array{Float64,2}(undef,size(x_sol_array,1),size(cc,1))
+  d = Matrix{Float64}(undef,length(S),length(M))
   for s in S, m in M
-    d[s,m] = sum([x_sol_array[s][l]*cc[m,l] for l in N])
+    d[s,m] = sum(x_sol_array[s][l]*cc[m,l] for l in N)
   end
   return d
 end
 
 #-----------------------------------------------------------------------------------
 
+function calculate_a(x_sol_array,aa,S,M)
+  a_cov = Vector{Matrix{Bool}}()
+  for cons in 1:data.ncons
+    push!(a_cov,Matrix{Bool}(undef,length(S),length(M)))
+    for s in S, m in M
+      a_cov[cons][s,m] = sum(x_sol_array[s][l]*aa[cons][m,l] for l in N) ≤ data.B[cons]
+    end
+  end
+  return a_cov
+end
+
+#-----------------------------------------------------------------------------------
+
 function find_new_solution(c_vec,a_vec,UB,fixedzero,fixedone,relax,bound,TIME)
-  sol_model=create_model(TIME)
+  sol_model = create_model(TIME)
   if relax
     @variable(sol_model, 0<=x[i in N]<=1, container=Array)
   else
     @variable(sol_model, x[i in N], Bin, container=Array)
   end
   add_constraints_X(sol_model,x)
-  @constraint(sol_model, [cons in 1:ncons], sum(a_vec[cons][i]*x[i] for i in N) ≤ data.B[cons] )
+  if data.ncons > 0
+    @constraint(sol_model, [cons in 1:data.ncons], sum(a_vec[cons][i]*x[i] for i in N) ≤ data.B[cons] )
+  end
   @constraint(sol_model,[i in fixedzero],x[i]==0)
   @constraint(sol_model,[i in fixedone],x[i]==1)
-  if bound @constraint(sol_model,sum([x[i]*c_vec[i] for i in N])<=UB) end
-  @objective(sol_model,Min,sum([x[i]*c_vec[i] for i in N]))
+  if bound @constraint(sol_model,sum(x[i]*c_vec[i] for i in N) ≤ UB) end
+  @objective(sol_model,Min,sum(x[i]*c_vec[i] for i in N))
   optimize!(sol_model)
   return value.(x)
 end
@@ -373,7 +319,7 @@ end
 function relax_and_fix(cc,aa,UB)
   fixedzero = []
   fixedone = []
-  time_remaining = TIME_LIM-(TIME_HEURISTIC+TIME_GENSOL+TIME_BS+TIME_LAZY_MIP)
+  time_remaining = TIME_LIM-TimerOutputs.tottime(to)/10^9
   time_relax = @elapsed solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,true,true,time_remaining)
   for i in N
     if solution[i]>=1-ϵ_p

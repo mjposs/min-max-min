@@ -8,19 +8,22 @@ density = 0.5
 ϵ = 0.005
 M = 4
 heuristicmode = "HEURCG"
+constraint_uncertainty = true
 
 instance = "$(inst_id)_$(n)_$(M)_$(density).txt"
-outputfilename = "/../result/KPscenario_generation_$(n)_$(k)_$(density).csv"
-outputfilenameheur = "/../result/KPscenario_generation_heur_$(n)_$(k)_$(density).csv"
-outputfilenamedual = "/../result/KPscenario_generation_dual_$(n)_$(k)_$(density).csv"
-data = read_data(instance)
+outputfilename = "/../result/KP_WU_scenario_generation_$(n)_$(k)_$(density).csv"
+outputfilenameheur = "/../result/KP_WU_scenario_generation_heur_$(n)_$(k)_$(density).csv"
+outputfilenamedual = "/../result/KP_WU_scenario_generation_dual_$(n)_$(k)_$(density).csv"
+data = read_data(instance,constraint_uncertainty)
 K = 1:k
 N = 1:data.n
 
 # The following excutions avoid warming-up issues
 #@elapsed ub, incumbent = heuristic_dualization()
 #@elapsed lb, gap, incumbent = exact_dualization()
-@elapsed lb, ub, gap, nscenarios, incumbent, heur = scenario_generation()
+@elapsed lb, ub, gap, nscenarios, incumbent, heur = scenario_generation(false)
+
+show(to)
 #@elapsed lb, ub, gap, nscenarios, incumbent = heuristic_scenario_generation()
 
 # Now comes the instance that is tested, passed by the arguments
@@ -36,11 +39,11 @@ density = 0.5
 M = 4
 
 instance = "$(inst_id)_$(n)_$(M)_$(density).txt"
-outputfilename = "/../results/KPscenario_generation_$(n)_$(k)_$(density).csv"
-outputfilenameheur = "/../results/KPscenario_generation_heur_$(n)_$(k)_$(density).csv"
-outputfilenamedual = "/../results/KPscenario_generation_dual_$(n)_$(k)_$(density).csv"
-outputfilenamedualheur = "/../results/KPscenario_generation_dual_heur_$(n)_$(k)_$(density).csv"
-println("Solving instance $inst_id with k=$k and M=$M and density=$density and ϵ=$ϵ ...")
+outputfilename = "/../results/KP_WU_scenario_generation_$(n)_$(k)_$(density).csv"
+outputfilenameheur = "/../results/KP_WU_scenario_generation_heur_$(n)_$(k)_$(density).csv"
+outputfilenamedual = "/../results/KP_WU_scenario_generation_dual_$(n)_$(k)_$(density).csv"
+outputfilenamedualheur = "/../results/KP_WU_scenario_generation_dual_heur_$(n)_$(k)_$(density).csv"
+@info "Solving instance $inst_id with k=$k and M=$M and density=$density and ϵ=$ϵ ..."
 data = read_data(instance)
 K = 1:k
 N = 1:data.n
@@ -53,7 +56,7 @@ N = 1:data.n
 # println(outputfile, output)
 # close(outputfile)
 #
-runtime = @elapsed lb, ub, gap, nscenarios, incumbent, heur = scenario_generation()   #
+runtime = @elapsed lb, ub, gap, nscenarios, incumbent, heur = scenario_generation(false)   #
 outputfile = open(string(dirname(@__FILE__),outputfilename), "a")
 output = "$n $inst_id $k $M $NUMBER_GENSOL $nscenarios $ϵ $runtime $NUMITER $lb $ub $gap $(TIME_HEURISTIC) $(TIME_GENSOL)"
 println(output)

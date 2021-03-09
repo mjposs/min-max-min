@@ -1,4 +1,4 @@
-function generate_data(n, seed, M, density)
+function generate_data(n, seed, M, density, constraint_uncertainty)
   function random_conflicts()
     E = Vector{Set}()
     D = 0
@@ -48,28 +48,34 @@ function generate_data(n, seed, M, density)
   for i in 1:n
     push!(to_print,Φ[i,:])
   end
-  push!(to_print,"FactorLoading_Ψ")
-  Ψ = Matrix{Float64}(undef, 0, M)
-  for i in 1:n
-    Ψ = [Ψ; diamond_uniform(M)']
-  end
-  for i in 1:n
-    push!(to_print,Φ[i,:])
+  if constraint_uncertainty
+    push!(to_print,"FactorLoading_Ψ")
+    Ψ = Matrix{Float64}(undef, 0, M)
+    for i in 1:n
+      Ψ = [Ψ; diamond_uniform(M)']
+    end
+    for i in 1:n
+      push!(to_print,Φ[i,:])
+    end
   end
   push!(to_print,"Conflicts")
   conflicts = random_conflicts()
   for (i,j) in conflicts
     push!(to_print,"$i $j")
   end
-  writedlm(string(dirname(@__FILE__),"/../data/KPneg_weightuncertainty/$(seed)_$(n)_$(M)_$(density).txt"),to_print)
+  if constraint_uncertainty writedlm(string(dirname(@__FILE__),"/../data/KPneg_weightuncertainty/$(seed)_$(n)_$(M)_$(density).txt"),to_print)
+  else writedlm(string(dirname(@__FILE__),"/../data/KPneg/$(seed)_$(n)_$(M)_$(density).txt"),to_print)
+  end
 end
 
 
 #-----------------------------------------------------------------------------------
 
-function read_data(instance::AbstractString)
-  file = readdlm(string(dirname(@__FILE__),"/../data/KP/",instance))
-  println("********** Read instance $(file[2,1]) ****************")
+function read_data(instance::AbstractString, constraint_uncertainty::Bool)
+  if constraint_uncertainty file = readdlm(string(dirname(@__FILE__),"/../data/KPneg_weightuncertainty/",instance))
+  else file = readdlm(string(dirname(@__FILE__),"/../data/KP/",instance))
+  end
+  @info "read instance $(file[2,1])"
   data = Data()
   data.n = file[4,1]
   data.M = file[6,1]
@@ -77,8 +83,15 @@ function read_data(instance::AbstractString)
   data.B = Vector{Float64}(undef,1)
   data.B[1] = file[8+data.n+1,1]
   data.hc = file[11+data.n:11+2*data.n-1,1]
-  data.Φ = file[11+2*data.n+1:11+3*data.n,1:4]
-  data.conflicts = Set.([file[i,1:2] for i in (13+3*data.n):size(file)[1]])
+  data.Φ = file[12+2*data.n:11+3*data.n,1:4]
+  if constraint_uncertainty
+    data.ncons = 1
+    data.Ψ = file[13+3*data.n:12+4*data.n,1:4]
+  else
+    data.ncons = 0
+  end
+  line = findfirst(file.=="Conflicts")[1]
+  data.conflicts = Set.([file[i,1:2] for i in (line+1):size(file)[1]])
   data.compatibility = trues(data.n,data.n)
   for (i,j) in data.conflicts
     data.compatibility[i,j] = false
@@ -124,7 +137,7 @@ function generate_solutions(ub)
         gen_sol(x,i,w,c,tΦ,tΨ,admissible)
         x[i] = true
         if admissible[i] # filter by conflicts constraints
-          if w - sum(abs.(tΨ)) ≤ data.B # filter by capacity constraint
+          if w - sum(abs.(tΨ)) ≤ data.B[1] # filter by capacity constraint
             tΦ += 0.5 * data.Φ[i,:] .* data.hc[i]
             tΨ += 0.5 * data.Ψ[i,:] .* data.w[i]
             c += data.hc[i]
@@ -167,7 +180,7 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function generate_neighbors(sol,ub)
+function generate_neighbors(sol,aa)
   X = Vector{BitArray{1}}()
   for k in 1:size(sol,1)
     x = falses(data.n)
@@ -184,10 +197,21 @@ function generate_neighbors(sol,ub)
       end
       for iprime in setdiff(findall(admissible),sol_items)
         y = copy(x)
-        if data.B-sum(data.w[s] for s in sol_items)+data.w[i]-data.w[iprime]>0
-          y[i]=false
-          y[iprime]=true
-          push!(X,y)
+        if data.ncons == 0
+          # check the knapsack constraint is satisfied
+          if data.B[1] - sum(data.w[s] for s in sol_items)+data.w[i]-data.w[iprime]>0
+            y[i]=false
+            y[iprime]=true
+            push!(X,y)
+          end
+        else
+          # add only solutions that satisfy the knapsack constraint for all scenarios
+          # generated so far
+          if data.B[1] - maximum(sum(aa[1][:,s] for s in sol_items) + aa[1][:,i] - aa[1][:,iprime])>0
+            y[i]=false
+            y[iprime]=true
+            push!(X,y)
+          end
         end
       end
     end
@@ -197,6 +221,7 @@ end
 
 #-----------------------------------------------------------------------------------
 
+"Add the constraints forming X"
 function add_constraints_X(model::Model, x::Array{VariableRef,1})
   if data.ncons == 0  # the knapsack constraint is in X
     @constraint(model, sum(data.w[i]*x[i] for i in N) ≤ data.B)
@@ -215,12 +240,12 @@ function populate_scenarios()
   aa[1] = Array{Float64,2}(undef,1,data.n)
   for l in N cc[1,l] = data.hc[l] end
   for i = 1:k-1
-    new_cost = [data.hc[l] for l in N] #This can be improved by adding other scenarios
+    new_cost = [data.hc[l] for l in N] #This might be improved by adding other scenarios
     cc = [cc; new_cost']
   end
   for l in N aa[1][1,l] = data.w[l] end
   for i = 1:k-1
-    new_weight = [data.w[l] for l in N] #This can be improved by adding other scenarios
+    new_weight = [data.w[l] for l in N] #This might be improved by adding other scenarios
     aa[1] = [aa[1]; new_weight']
   end
   return aa, cc
@@ -236,34 +261,34 @@ end
 
 #-----------------------------------------------------------------------------------
 
-function build_and_solve_separation(x,θ)
-  time_remaining = TIME_LIM-(TIME_GENSOL + TIME_HEURISTIC + TIME_BS + TIME_LAZY_MIP)
-  separate = create_model(max(0,time_remaining))
-  if data.ncons == 0
+function build_and_solve_separation(x)
+  feasible = true
+  if data.ncons > 0
+    # Search for a violated constraint. Here this is an LP but could be generalized
+    # to more constraints using the indicator-constraints proposed by Subramaniam et al.
+    time_remaining = TIME_LIM - TimerOutputs.tottime(to)/10^9
+    separate = create_model(max(0,time_remaining))
+    @variable(separate, z)
+    @variable(separate, -1 ≤ ξ[1:data.M] ≤ 1)
+    @constraint(separate, sep_cost[k in K], z <= sum((1+sum(data.Ψ[i,j]*ξ[j] for j in 1:data.M)/2)data.w[i]*x[k,i] for i in N))
+    @objective(separate, Max, z)
+    @timeit to "constraint" optimize!(separate)
+    if termination_status(separate)==MOI.OPTIMAL
+      feasible = objective_value(separate) < data.B[1]
+    end
+  end
+  if data.ncons == 0 || feasible
+    # Compute the worst-case only if x is feasible
+    time_remaining = TIME_LIM - TimerOutputs.tottime(to)/10^9
+    separate = create_model(max(0,time_remaining))
     @variable(separate, z)
     @variable(separate, -1 ≤ ξ[1:data.M] ≤ 1)
     @constraint(separate, sep_cost[k in K], z <= sum((1+sum(data.Φ[i,j]*ξ[j] for j in 1:data.M)/2)data.hc[i]*x[k,i] for i in N))
     @objective(separate, Max, z)
-    optimize!(separate)
-    sep_objective = true
-  else
-    data.ncons = L
-    @variable(separate, ζ)
-    @variable(separate, z[K,0:L], Bin)
-    @variable(separate, -1 ≤ ξ[1:data.M] ≤ 1)
-    @constraint(separate, [k in K], sum(z[k,l] for l in 0:L) == 1)
-    @constraint(separate, [k in K], z[k,0] => {ζ ≤ sum((1+sum(data.Φ[i,j]*ξ[j] for j in 1:data.M)/2)data.hc[i]*x[k,i] for i in N) - θ})
-    @constraint(separate, [k in K,l in 1:L], z[k,l] => {ζ ≤ sum((1+sum(data.Ψ[i,j]*ξ[j] for j in 1:data.M)/2)data.w[i]*x[k,i] for i in N) - data.B[l]})
-    optimize!(separate)
-    sep_objective = isempty(findall(value.(z[:,1:L]) .== false))
-    if sep_objective
-      # the scenario was found for the objective for each k
-      # verify if it is indeed feasible
-      sep_objective = sum([1+sum([data.Ψ[i,j]*getvalue(ξ[j]) for j in 1:data.M])/2)data.w[i]*x[k,i] for i in N]) - data.B[l] ≤ 0
-    end
+    @timeit to "objective" optimize!(separate)
   end
   if termination_status(separate)==MOI.OPTIMAL
-    return value.(ξ),objective_value(separate)
+    return value.(ξ),objective_value(separate),feasible
   else
     return [],-Inf, false
   end
@@ -334,4 +359,27 @@ function exact_dualization()
   @objective(dualized,Min, sum(sum(data.hc[i]*ρ[k,i] for i in N) for k in K) + sum(u[j]+v[j] for j in 1:data.M))
   optimize!(dualized)
   return objective_value(dualized),MOI.get(dualized, MOI.RelativeGap()), value.(x)
+end
+
+#-----------------------------------------------------------------------------------
+
+"The heuristic constraint generation requires a starting upper bound, obtained through a classical
+dualized model."
+
+function solve_static()
+  dualized = create_model(TIME_LIM)
+  @variable(dualized, 0 ≤ u[j in 1:data.M])
+  @variable(dualized, 0 ≤ v[j in 1:data.M])
+  @variable(dualized, x[i in N], Bin,container=Array)
+  add_constraints_X(dualized,x)
+  @constraint(dualized,[j in 1:data.M], u[j] - v[j] == sum(data.Φ[i,j]*data.hc[i]/2*x[i] for i in N))
+  if data.ncons > 0
+    @variable(dualized, 0 ≤ u_weight[j in 1:data.M])
+    @variable(dualized, 0 ≤ v_weight[j in 1:data.M])
+    @constraint(dualized,[j in 1:data.M], u_weight[j] - v_weight[j] == sum(data.Ψ[i,j]*data.w[i]/2*x[i] for i in N))
+    @constraint(dualized, sum(data.w[i]*x[i] for i in N) + sum(u_weight[j]+v_weight[j] for j in 1:data.M) ≤ data.B[1])
+  end
+  @objective(dualized,Min, sum(data.hc[i]*x[i] for i in N) + sum(u[j]+v[j] for j in 1:data.M))
+  optimize!(dualized)
+  return objective_value(dualized)
 end

@@ -1,22 +1,18 @@
-using JuMP, Gurobi, LightGraphs, DelimitedFiles, LinearAlgebra, Random
+using JuMP, CPLEX, LightGraphs, DelimitedFiles, LinearAlgebra, Random, TimerOutputs
 
 include("../src/algorithm.jl")
 
-TIME_BS = 0 #time spent in the solution of master
-TIME_LAZY_MIP = 0  #time spent in the separation routine
-TIME_HEURISTIC = 0 #time spent in the heuristic
-TIME_GENSOL = 0
-NUMITER = 0        #number of iterations of the extended static algorithm
 const ϵ_p = 10^-5          #precision epsilon
 const TIME_LIM = 7200
-const Optimizer = "Gurobi"
-const GUROBI_ENV = Gurobi.Env()
+const Optimizer = "CPLEX"
+#const GUROBI_ENV = Gurobi.Env()
+const to = TimerOutput()
 
 #-----------------------------------------------------------------------------------
 
 function create_model(TIME_LIM)
   if Optimizer=="CPLEX"
-    M = Model(with_optimizer(CPLEX.Optimizer))
+    M = Model(CPLEX.Optimizer)
     MOI.set(M, MOI.RawParameter("CPX_PARAM_THREADS"), 1)
     MOI.set(M, MOI.RawParameter("CPX_PARAM_SCRIND"), 0)
     MOI.set(M, MOI.RawParameter("CPX_PARAM_MIPDISPLAY"), 1)
