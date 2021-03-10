@@ -9,10 +9,10 @@ function scenario_generation(heuristic)
       @timeit to "heuristic" heur,incumbent = heuristic_dualization()
     elseif heuristicmode == "HEURCG"
       @timeit to "heuristic" begin
-        lb, heur, gap, lm, incumbent = scenario_generation(true)
+        return_values = scenario_generation(true)
       end
     end
-    ub = heur
+    ub = return_values[2] # the only returned value that matters is the value of the heuristic solution
     @info "exact mode"
     println("Heuristic value is $ub")
     @timeit to "gen_sol" solutions = generate_solutions(ub)
@@ -48,13 +48,13 @@ function scenario_generation(heuristic)
       if heuristic
         # The following might be optimized by updating instead of creating from scratch
         # but I don't think this is bottleneck
-        @timeit to "update d" d = calculate_d(x_sol_array,cc,S,M)
-        if data.ncons > 0
-          @timeit to "update a_cov" a_cov = calculate_a(x_sol_array,aa,S,M)
+        @timeit to "re-calculate d" d = calculate_d(x_sol_array,cc,S,M)
+        if data.constraint_uncertainty
+          @timeit to "re-calculate a_cov" a_cov = calculate_a(x_sol_array,aa,S,M)
         end
       else
         @timeit to "update d" d = update_d(x_sol_array,cc,d,S,M,NUMITER)
-        if data.ncons > 0
+        if data.constraint_uncertainty
           @timeit to "update a_cov" a_cov = update_a(x_sol_array,aa,a_cov,S,M,NUMITER)
         end
       end
@@ -98,7 +98,7 @@ function scenario_generation(heuristic)
       TotalTime > TIME_LIM && break
     end
   end
-  return lb, ub, gap, length(M), incumbent
+  return lb, ub, gap, length(M), NUMITER, length(S)
 end
 
 #-----------------------------------------------------------------------------------
@@ -131,7 +131,7 @@ function binary_search(x_sol_array,sol_items,lb,ub,ϵ_BS,d,a_cov,cc,δ)
     else
       @timeit to "dominance solutions" SS = calculate_nondom_solutions(cov,last,M,S)
       @timeit to "dominance scenarios" MM = calculate_nondom_scenarios(cov,M,S)
-      @timeit to "covcering" objval,solutions_selected = build_and_solve_covering_MIP(SS,MM,cov)
+      @timeit to "solve covering problem" objval,solutions_selected = build_and_solve_covering_MIP(SS,MM,cov)
       infeasible = objval > 0.9
     end
     if !infeasible
@@ -262,7 +262,7 @@ function update_a(x_sol_array,aa,a_cov,S,M,NUMITER)
         a_cov[cons][s,m] = sum(x_sol_array[s][l]*aa[cons][m,l] for l in N) ≤ data.B[cons]
       end
     else
-      for cons in data.ncons, s in S, m in M
+      for cons in data.ncons
         new_cov = [sum(x_sol_array[s][l]*aa[cons][length(M),l] for l in N) ≤ data.B[cons] for s in S]
         a_cov[cons] = [a_cov[cons] new_cov]
       end
@@ -303,7 +303,7 @@ function find_new_solution(c_vec,a_vec,UB,fixedzero,fixedone,relax,bound,TIME)
     @variable(sol_model, x[i in N], Bin, container=Array)
   end
   add_constraints_X(sol_model,x)
-  if data.ncons > 0
+  if data.constraint_uncertainty
     @constraint(sol_model, [cons in 1:data.ncons], sum(a_vec[cons][i]*x[i] for i in N) ≤ data.B[cons] )
   end
   @constraint(sol_model,[i in fixedzero],x[i]==0)
@@ -320,7 +320,7 @@ function relax_and_fix(cc,aa,UB)
   fixedzero = []
   fixedone = []
   time_remaining = TIME_LIM-TimerOutputs.tottime(to)/10^9
-  time_relax = @elapsed solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,true,true,time_remaining)
+  @timeit to "relaxation" solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,true,true,time_remaining)
   for i in N
     if solution[i]>=1-ϵ_p
       push!(fixedone,i)
@@ -328,7 +328,7 @@ function relax_and_fix(cc,aa,UB)
       push!(fixedzero,i)
     end
   end
-  solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,false,false,(time_remaining-time_relax))
+  @timeit to "integer" solution = find_new_solution(cc,aa,UB,fixedzero,fixedone,false,false,time_remaining)
   return solution
 end
 

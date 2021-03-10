@@ -87,8 +87,10 @@ function read_data(instance::AbstractString, constraint_uncertainty::Bool)
   if constraint_uncertainty
     data.ncons = 1
     data.Ψ = file[13+3*data.n:12+4*data.n,1:4]
+    data.constraint_uncertainty = true
   else
     data.ncons = 0
+    data.constraint_uncertainty = false
   end
   line = findfirst(file.=="Conflicts")[1]
   data.conflicts = Set.([file[i,1:2] for i in (line+1):size(file)[1]])
@@ -118,6 +120,7 @@ mutable struct Data
   conflicts::Vector{Set}
   compatibility::Matrix{Bool}
   ncons::Int #number of uncertain constraints. equal to 1 in this application.
+  constraint_uncertainty::Bool
   Data() = new()
 end
 
@@ -139,7 +142,9 @@ function generate_solutions(ub)
         if admissible[i] # filter by conflicts constraints
           if w - sum(abs.(tΨ)) ≤ data.B[1] # filter by capacity constraint
             tΦ += 0.5 * data.Φ[i,:] .* data.hc[i]
-            tΨ += 0.5 * data.Ψ[i,:] .* data.w[i]
+            if data.constraint_uncertainty
+              tΨ += 0.5 * data.Ψ[i,:] .* data.w[i]
+            end
             c += data.hc[i]
             w += data.w[i]
             next_admissible = copy(admissible)
@@ -197,7 +202,7 @@ function generate_neighbors(sol,aa)
       end
       for iprime in setdiff(findall(admissible),sol_items)
         y = copy(x)
-        if data.ncons == 0
+        if !data.constraint_uncertainty
           # check the knapsack constraint is satisfied
           if data.B[1] - sum(data.w[s] for s in sol_items)+data.w[i]-data.w[iprime]>0
             y[i]=false
@@ -223,8 +228,8 @@ end
 
 "Add the constraints forming X"
 function add_constraints_X(model::Model, x::Array{VariableRef,1})
-  if data.ncons == 0  # the knapsack constraint is in X
-    @constraint(model, sum(data.w[i]*x[i] for i in N) ≤ data.B)
+  if !data.constraint_uncertainty  # the knapsack constraint is in X
+    @constraint(model, sum(data.w[i]*x[i] for i in N) ≤ data.B[1])
   end
   #@constraint(model,[(i,j) in data.conflicts],x[i]+x[j] ≤ 1)
   @constraint(model,[i in 1:data.n],length(data.E[i])*x[i]+sum(x[j] for j in data.E[i])≤ length(data.E[i]))
@@ -255,7 +260,11 @@ end
 
 function add_scenario(δ)
   new_cost = [(1+sum(data.Φ[i,j]*δ[j] for j in 1:data.M)/2)data.hc[i] for i in N]
-  new_weights = [ [(1+sum(data.Ψ[i,j]*δ[j] for j in 1:data.M)/2)data.w[i] for i in N] for cons in 1:1 ] # only one constraint is considered
+  if data.constraint_uncertainty
+    new_weights = [ [(1+sum(data.Ψ[i,j]*δ[j] for j in 1:data.M)/2)data.w[i] for i in N] for cons in 1:1 ] # only one constraint is considered
+  else
+    new_weights = undef
+  end
   return new_cost, new_weights
 end
 
@@ -263,7 +272,7 @@ end
 
 function build_and_solve_separation(x)
   feasible = true
-  if data.ncons > 0
+  if data.constraint_uncertainty
     # Search for a violated constraint. Here this is an LP but could be generalized
     # to more constraints using the indicator-constraints proposed by Subramaniam et al.
     time_remaining = TIME_LIM - TimerOutputs.tottime(to)/10^9
@@ -277,7 +286,7 @@ function build_and_solve_separation(x)
       feasible = objective_value(separate) < data.B[1]
     end
   end
-  if data.ncons == 0 || feasible
+  if !data.constraint_uncertainty || feasible
     # Compute the worst-case only if x is feasible
     time_remaining = TIME_LIM - TimerOutputs.tottime(to)/10^9
     separate = create_model(max(0,time_remaining))
@@ -373,7 +382,7 @@ function solve_static()
   @variable(dualized, x[i in N], Bin,container=Array)
   add_constraints_X(dualized,x)
   @constraint(dualized,[j in 1:data.M], u[j] - v[j] == sum(data.Φ[i,j]*data.hc[i]/2*x[i] for i in N))
-  if data.ncons > 0
+  if data.constraint_uncertainty
     @variable(dualized, 0 ≤ u_weight[j in 1:data.M])
     @variable(dualized, 0 ≤ v_weight[j in 1:data.M])
     @constraint(dualized,[j in 1:data.M], u_weight[j] - v_weight[j] == sum(data.Ψ[i,j]*data.w[i]/2*x[i] for i in N))
