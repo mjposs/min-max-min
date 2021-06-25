@@ -121,6 +121,7 @@ mutable struct Data
   compatibility::Matrix{Bool}
   ncons::Int #number of uncertain constraints. equal to 1 in this application.
   constraint_uncertainty::Bool
+  heuristic_ub::Float64
   Data() = new()
 end
 

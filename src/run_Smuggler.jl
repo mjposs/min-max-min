@@ -51,7 +51,7 @@ reset_timer!(to::TimerOutput)
 STARTTIME = time()
 runtime = @elapsed lb, ub, solution, gap, NUMBER_GENSC, NUMITER, NUMBER_GENSOL = scenario_generation(false,false)
 outputfile = open(string(dirname(@__FILE__),outputfilename), "a")
-output = "$n $inst_id $k $NUMBER_GENSC $(data.nX_before_dom) $NUMBER_GENSOL $ϵ $runtime $NUMITER $lb $ub $gap $(TimerOutputs.time(to["heuristic"])/10^9) $(TimerOutputs.time(to["gen_sol"])/10^9)"
+output = "$n $inst_id $k $NUMBER_GENSC $(data.nX_before_dom) $NUMBER_GENSOL $ϵ $runtime $NUMITER $lb $ub $gap $(TimerOutputs.time(to["heuristic"])/10^9) $(TimerOutputs.time(to["gen_sol"])/10^9) $(data.heuristic_ub)"
 println(output)
 println()
 println(outputfile, output)

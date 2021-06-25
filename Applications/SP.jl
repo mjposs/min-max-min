@@ -61,6 +61,7 @@ mutable struct Data
   b::Vector{Int} #RHS
   constraint_uncertainty::Bool
   ncons::Int
+  heuristic_ub::Float64
   Data() = new()
 end
 

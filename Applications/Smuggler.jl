@@ -75,6 +75,7 @@ mutable struct Data
   compatibility::Matrix{Bool}
   constraint_uncertainty::Bool
   nX_before_dom::Int
+  heuristic_ub::Float64
   Data() = new()
 end
 
