@@ -2,7 +2,7 @@
 
 This repository contains the algorithms used to solve min-sup-min robust optimization problems studied in the paper
 
-*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-sup-min robust combinatorial optimization with few recourse solutions. Accepted for publication in INFORMS Journal on Computing. Available at https://hal.archives-ouvertes.fr/hal-02939356/document*
+*Ayşe Nur Arslan, Michael Poss, and Marco Silva: Min-sup-min robust combinatorial optimization with few recourse solutions. Conditionally accepted for publication in INFORMS Journal on Computing. Available at https://hal.archives-ouvertes.fr/hal-02939356/document*
 
 The following algorithms are available:
 * The monholithic reformulation from [HKW15](https://doi.org/10.1287/opre.2015.1392 "K-Adaptability in Two-Stage Robust Binary Programming"), see function `exact_dualization()` located in each application file
